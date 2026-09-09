@@ -15,34 +15,39 @@ from mytonctrl.utils import get_current_user
 
 def test_create_backup(cli, ton, monkeypatch, tmp_path, mocker: MockerFixture):
     tmp_dir = tmp_path / "test"
+    tmp_dir_created = 0
 
     def create_tmp_ton_dir(_):
+        nonlocal tmp_dir_created
+        tmp_dir_created += 1
         os.makedirs(tmp_dir)
         return str(tmp_dir)
 
     monkeypatch.setattr(BackupModule, "create_tmp_ton_dir", create_tmp_ton_dir)
 
-    fun_args, fun_user = [], None
+    fun_args, fun_user, fun_as_root = [], None, None
     return_code = 0
 
-    def run_create_backup(_, args: list, user: str):
-        nonlocal fun_args, fun_user, return_code
+    def run_create_backup(_, args: list, user: str, as_root: bool = False) -> int:
+        nonlocal fun_args, fun_user, fun_as_root, return_code
         fun_args = args
         fun_user = user
-        mock = mocker.Mock()
-        mock.returncode = return_code
-        return mock
+        fun_as_root = as_root
+        return return_code
 
     monkeypatch.setattr(BackupModule, "run_create_backup", run_create_backup)
 
     output = cli.execute("create_backup", no_color=True)
     assert "create_backup - OK" in output
     assert fun_user is None
+    assert fun_as_root is False
     assert fun_args == ["-m", ton.local.my_work_dir, "-t", str(tmp_dir), "-k", "/var/ton-work/keys"]
+    assert tmp_dir_created == 1
 
     output = cli.execute("create_backup /to_dir/", no_color=True)
     assert "create_backup - OK" in output
     assert fun_user is None
+    assert fun_as_root is False
     assert fun_args == ["-m", ton.local.my_work_dir, "-t", str(tmp_dir), "-k", "/var/ton-work/keys", "-d", "/to_dir/"]
     assert not Path(tmp_dir).exists()
 
@@ -51,11 +56,74 @@ def test_create_backup(cli, ton, monkeypatch, tmp_path, mocker: MockerFixture):
     assert fun_user == 'yungwine'
     assert fun_args == ["-m", ton.local.my_work_dir, "-t", str(tmp_dir), "-k", "/var/ton-work/keys", "-d", "/to_dir/"]
     assert not Path(tmp_dir).exists()
+    assert tmp_dir_created == 3
+
+    # --from-host: no validator-console round-trip, the node's own db dir is handed to the script,
+    # which then has to run as root to read the validator-owned keyring and config.json
+    output = cli.execute("create_backup --from-host", no_color=True)
+    assert "create_backup - OK" in output
+    assert fun_user is None
+    assert fun_as_root is True
+    assert fun_args == ["-m", ton.local.my_work_dir, "-b", "/var/ton-work/db", "-k", "/var/ton-work/keys"]
+    assert tmp_dir_created == 3
+
+    output = cli.execute("create_backup /to_dir/ --from-host -u yungwine", no_color=True)
+    assert "create_backup - OK" in output
+    assert fun_user == 'yungwine'
+    assert fun_as_root is True
+    assert fun_args == ["-m", ton.local.my_work_dir, "-b", "/var/ton-work/db", "-k", "/var/ton-work/keys", "-d", "/to_dir/"]
+    assert tmp_dir_created == 3
+    assert not Path(tmp_dir).exists()
+
+    # the db dir comes from the configured paths, not from <ton_work>/db
+    ton.local.db["paths"] = {"ton_db": "/mnt/ton-db/", "ton_keys": "/mnt/keys/"}
+    output = cli.execute("create_backup --from-host", no_color=True)
+    assert "create_backup - OK" in output
+    assert fun_args == ["-m", ton.local.my_work_dir, "-b", "/mnt/ton-db", "-k", "/mnt/keys"]
+    ton.local.db.pop("paths")
 
     return_code = 1
     output = cli.execute("create_backup /to_dir/ -u yungwine", no_color=True)
     assert "create_backup - Error" in output
 
+    output = cli.execute("create_backup /to_dir/ --from-host", no_color=True)
+    assert "create_backup - Error" in output
+
+    # too many args
+    output = cli.execute("create_backup /to_dir/ --from-host -u yungwine extra", no_color=True)
+    assert "Bad args" in output
+
+
+def test_run_create_backup_as_root(monkeypatch, mocker: MockerFixture):
+    runs, root_runs = [], []
+
+    def fake_run(cmd, **kwargs):
+        runs.append((cmd, kwargs))
+        return mocker.Mock(returncode=7)
+
+    def fake_run_as_root(cmd):
+        root_runs.append(cmd)
+        return 5
+
+    monkeypatch.setattr(backups_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(backups_module, "run_as_root", fake_run_as_root)
+    with get_package_resource_path('mytonctrl', 'scripts/create_backup.sh') as backup_path:
+        script = str(backup_path)
+
+    # default: plain bash with a timeout, exit code passed through
+    assert BackupModule.run_create_backup(["-m", "/mtc"], user="abc") == 7
+    assert runs == [(["bash", script, "-u", "abc", "-m", "/mtc"], {"timeout": 30})]
+    assert root_runs == []
+
+    # as_root: goes through run_as_root, which handles sudo/su and runs without a timeout
+    assert BackupModule.run_create_backup(["-m", "/mtc"], user="abc", as_root=True) == 5
+    assert root_runs == [["bash", script, "-u", "abc", "-m", "/mtc"]]
+    assert len(runs) == 1
+
+    # user defaults to the caller, resolved before any sudo so the archive is handed back to them
+    monkeypatch.setattr(backups_module, "get_current_user", lambda: "caller")
+    BackupModule.run_create_backup([], as_root=True)
+    assert root_runs[-1] == ["bash", script, "-u", "caller"]
 
 
 def test_restore_backup(cli, ton, monkeypatch, tmp_path, mocker: MockerFixture):
@@ -187,8 +255,8 @@ def test_create_collators_list_unreadable(ton, monkeypatch, tmp_path):
 
     module = BackupModule(ton, ton.local)
 
-    # node too old / console error -> backup still succeeds, just without the file,
-    # and restoring it leaves the recipient's collators list alone
+    # node too old / console error -> backup still succeeds, just without the file here;
+    # create_backup.sh then stores an empty list, same as for a node with no list set
     def raise_(self):
         raise Exception("node does not support collators list commands (old node version)")
 
