@@ -404,7 +404,11 @@ class UtilitiesModule(MtcModule):
         else:
             pool = self.ton.GetLocalPool(pool_name)
             pool_addr = pool.addrB64
-        pool_data = self.ton.GetPoolData(pool_addr)
+        account = self.ton.GetAccount(pool_addr)
+        if self.ton.account_is_pool_v2(account):
+            pool_data = asdict(self.ton.get_pool_data_v2(pool_addr))
+        else:
+            pool_data = self.ton.GetPoolData(pool_addr)
         print(json.dumps(pool_data, indent=4))
 
     def add_console_commands(self, console):

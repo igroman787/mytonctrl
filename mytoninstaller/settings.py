@@ -621,10 +621,10 @@ def ConfigureOnlyNode(local: MyPyClass, ctx: InstallerContext):
 	mconfig_dir = _get_dir_from_path(mconfig_path)
 	local.add_log("start ConfigureOnlyNode function", "info")
 
-	ton_work_dir = ctx.paths.ton_work_dir.rstrip('/')
+	db_dir = ctx.paths.ton_db_dir.rstrip('/')
 	keys_dir = ctx.paths.keys_dir.rstrip('/')
-	process = BackupModule.run_create_backup(["-m", mconfig_dir, "-t", ton_work_dir, "-k", keys_dir], user=ctx.user)
-	if process.returncode != 0:
+	exit_code = BackupModule.run_create_backup(["-m", mconfig_dir, "-b", db_dir, "-k", keys_dir], user=ctx.user)
+	if exit_code != 0:
 		local.add_log("Backup creation failed", "error")
 		return
 	local.add_log("Backup successfully created. Use this file on the controller server with `--only-mtc` flag on installation.", "info")

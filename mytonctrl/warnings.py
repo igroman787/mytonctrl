@@ -179,6 +179,10 @@ class WarningChecker:
         if result != 0:
             color_print(self.local.translate("vport_error"))
 
+    def check_nominator_pool_deprecated(self):
+        if self.ton.using_nominator_pool():
+            self.print_warning("nominator_pool_deprecated_warning")
+
     def check_mytonctrl_update(self):
         if self.ton.local.db.get("updateCheckDisabled"):
             return
@@ -200,3 +204,4 @@ class WarningChecker:
         self.local.try_function(self.check_ubuntu_version)
         self.local.try_function(self.check_node_port)
         self.local.try_function(self.check_ton_http_api_version)
+        self.local.try_function(self.check_nominator_pool_deprecated)

@@ -45,28 +45,41 @@ class BackupModule(MtcModule):
         return dir_name
 
     @staticmethod
-    def run_create_backup(args, user: Optional[str] = None):
+    def run_create_backup(args, user: Optional[str] = None, as_root: bool = False) -> int:
         if user is None:
             user = get_current_user()
         with get_package_resource_path('mytonctrl', 'scripts/create_backup.sh') as backup_script_path:
-            return subprocess.run(["bash", backup_script_path, "-u", user] + args, timeout=30)
+            command = ["bash", str(backup_script_path), "-u", user] + args
+            if as_root:
+                return run_as_root(command)
+            return subprocess.run(command, timeout=30).returncode
 
     def create_backup(self, args):
-        if not check_usage_args_min_max_len("create_backup", args, 0, 3):
+        if not check_usage_args_min_max_len("create_backup", args, 0, 4):
             return
-        tmp_dir = self.create_tmp_ton_dir()
-        command_args = ["-m", self.ton.local.my_work_dir, "-t", tmp_dir, "-k", str(self.ton.get_paths().ton_keys)]
+        from_host = '--from-host' in args
+        if from_host:
+            args.remove('--from-host')
         user = pop_user_from_args(args)
+        paths = self.ton.get_paths()
+        if from_host:
+            tmp_dir = None
+            source_args = ["-b", str(paths.ton_db)]
+        else:
+            tmp_dir = self.create_tmp_ton_dir()
+            source_args = ["-t", tmp_dir]
+        command_args = ["-m", self.ton.local.my_work_dir] + source_args + ["-k", str(paths.ton_keys)]
         if len(args) == 1:
             command_args += ["-d", args[0]]
-        process = self.run_create_backup(command_args, user=user)
+        exit_code = self.run_create_backup(command_args, user=user, as_root=from_host)
 
-        if process.returncode == 0:
+        if exit_code == 0:
             color_print("create_backup - {green}OK{endc}")
         else:
             color_print("create_backup - {red}Error{endc}")
-        shutil.rmtree(tmp_dir)
-        return process.returncode
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir)
+        return exit_code
 
     @staticmethod
     def run_restore_backup(args, user: Optional[str] = None):

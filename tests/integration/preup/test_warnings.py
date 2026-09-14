@@ -247,3 +247,13 @@ def test_check_ton_http_api_version(cli, monkeypatch):
     monkeypatch.setattr(warnings, 'get_ton_http_api_version', lambda: '3.0.0')
     output = cli.run_pre_up()
     assert 'ton-http-api version' not in output
+
+
+def test_check_nominator_pool_deprecated(cli, monkeypatch):
+    monkeypatch.setattr(MyTonCore, 'using_nominator_pool', lambda *_: True)
+    output = cli.run_pre_up()
+    assert 'Nominator pool v1 (`nominator-pool` mode) is deprecated' in output
+
+    monkeypatch.setattr(MyTonCore, 'using_nominator_pool', lambda *_: False)
+    output = cli.run_pre_up()
+    assert 'is deprecated' not in output

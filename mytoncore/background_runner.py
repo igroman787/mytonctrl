@@ -245,12 +245,17 @@ class BackgroundRunner:
                 time.sleep(10)
                 continue
 
-        self._local.start_cycle(self._validator_module.run_elections, sec=600)
+        network_name = self._ton.GetNetworkName()
+        t = 600
+        if network_name != "mainnet":
+            t = 300
+
+        self._local.start_cycle(self._validator_module.run_elections, sec=t)
         self._local.start_cycle(self._offers, sec=600)
         self._local.start_cycle(self._save_past_events, sec=300)
 
         t = 1800
-        if self._ton.GetNetworkName() != "mainnet":
+        if network_name != "mainnet":
             t = 300
         self._local.start_cycle(self._complaints, sec=t)
         self._local.start_cycle(self._slashing, sec=t)

@@ -31,10 +31,11 @@ MyTonCtrl supports these installation modes:
 - `collator` - run the node as a collator
 - `validator` - run a validator node using the validator wallet for staking
 - `single-nominator` - run a validator node with single-nominator staking (recommended for validators)
-- `nominator-pool` - run a validator node with nominator-pool staking
+- `nominator-pool-v2` - run a validator node with nominator-pool v2 staking
+- `nominator-pool` - run a validator node with nominator-pool v1 staking (**deprecated**, use `nominator-pool-v2`)
 - `liquid-staking` - run a validator node with liquid-staking enabled
 
-`single-nominator`, `nominator-pool`, and `liquid-staking` all install a validator node and enable `validator` mode automatically.
+`single-nominator`, `nominator-pool-v2`, `nominator-pool`, and `liquid-staking` all install a validator node and enable `validator` mode automatically.
 You can change enabled modes later after installation.
 
 Learn more about node types: https://docs.ton.org/v3/documentation/nodes/overview

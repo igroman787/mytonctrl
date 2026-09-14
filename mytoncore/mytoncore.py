@@ -7,7 +7,9 @@ import json
 import hashlib
 import struct
 import typing
+from contextlib import AbstractContextManager
 from dataclasses import asdict
+from pathlib import Path
 from typing import Union, Any
 
 import psutil
@@ -24,7 +26,8 @@ from mytoncore.utils import (
     get_package_resource_path,
     raw_addr_to_b64,
 	nano_ton_to_ton,
-	dec2hex
+	dec2hex,
+	parse_mc_addr_from_vm_int,
 )
 from mytoncore.output import (
 	get_cell_body,
@@ -53,6 +56,10 @@ from mytoncore.models import (
     CacheResult,
     BlockHead,
     WorkchainConfig,
+    PoolDataV2,
+    LimitsPerValidatorV2,
+    ValidatorInfoV2,
+    UsageRecordV2,
 )
 
 from mypylib.mypylib import (
@@ -378,6 +385,7 @@ class MyTonCore:
 		arr["v4"] = "7ae380664c513769eaa5c94f9cd5767356e3f7676163baab66a4b73d5edab0e5"
 		arr["hv1"] = "fc8e48ed7f9654ba76757f52cc6031b2214c02fab9e429ffa0340f5575f9f29c"
 		arr["pool"] = "399838da9489139680e90fd237382e96ba771fdf6ea27eb7d513965b355038b4"
+		arr["npool_v2"] = "653ada77b5f36e40d42e59841c9f035a39fb2eedda1fa7bfa60511b6755294d3"
 		arr["spool"] = "fc2ae44bcaedfa357d0091769aabbac824e1c28f14cc180c0b52a57d83d29054"
 		arr["spool_r2"] = "42bea8fea43bf803c652411976eb2981b9bdb10da84eb788a63ea7a01f2a044d"
 		arr["liquid_pool_r1"] = "82bc5760719c34395f80df76c42dc5d287f08f6562c643601ebed6944302dcc2"
@@ -759,11 +767,13 @@ class MyTonCore:
 		var1 = resultList[start_index + 1]
 		return var1
 
-	def GetValidatorSignature(self, validatorKey, var1):
+	def GetValidatorSignature(self, validatorKey: str, var1: str) -> str:
 		self.local.add_log("start GetValidatorSignature function", "debug")
 		cmd = "sign {validatorKey} {var1}".format(validatorKey=validatorKey, var1=var1)
 		result = self.validatorConsole.run(cmd)
 		validatorSignature = parse(result, "got signature ", '\n')
+		if validatorSignature is None:
+			raise Exception(f"no signature in validator console output: {result}")
 		return validatorSignature
 
 	def SignElectionRequestWithValidator(self, wallet, startWorkTime, adnlAddr, validatorPubkey_b64, validatorSignature, maxFactor):
@@ -905,7 +915,7 @@ class MyTonCore:
 		resultFilePath = parse(result, "Saved to file ", '\n')
 		return resultFilePath
 
-	def GetStake(self, account: Account):
+	def GetStake(self, account: Account) -> float:
 		stake = self.local.db.get("stake")
 		usePool = self.using_pool()
 		useController = self.using_liquid_staking()
@@ -915,24 +925,33 @@ class MyTonCore:
 		config17 = self.get_config_17()
 
 		is_single_nominator = self.is_account_single_nominator(account)
-
-		if stake is None and usePool and not is_single_nominator:
+		is_pool_v2_account = self.account_is_pool_v2(account)
+		min_pool_stake = 0
+		stakeable = account.balance
+		if stake is None and usePool and not is_single_nominator and not is_pool_v2_account:
 			stake = account.balance - 20
-		if stake is None and useController:
+		if stake is None and useController and not is_pool_v2_account:
 			stake = account.balance - 50
+		if stake is None and is_pool_v2_account:
+			validator_info = self.get_validator_info_v2(account.addrB64, self.GetValidatorWallet().addrB64)
+			limits = self.get_limits_per_validator_v2(account.addrB64)
+			min_pool_stake = nano_ton_to_ton(limits.min_ton_per_validator)
+			stakeable = max(nano_ton_to_ton(validator_info.stakeable) - 5, 0)
+			if stakeable == 0:
+				raise Exception(f"Stakeable is zero for pool {account.addrB64}")
 		if stake is None:
 			sp = stakePercent / 100
 			if sp > 1 or sp < 0:
 				self.local.add_log("Wrong stakePercent value. Using default stake.", "warning")
 				stakePercent = 100
 				sp = 1
-			if len(vconfig.validators) == 0 and not stake_no_split:
-				stake = int(account.balance*sp/2)
+			if len(vconfig.validators) == 0 and not stake_no_split and not is_pool_v2_account:
+				stake = int(stakeable*sp/2)
 				if stake < config17.min_stake:  # not enough funds to divide them by 2
-					stake = int(account.balance*sp)
+					stake = int(stakeable*sp)
 			else:
-				stake = int(account.balance*sp)
-			if stakePercent == 100:
+				stake = int(stakeable*sp)
+			if stakePercent == 100 and not is_pool_v2_account:
 				stake -= 20
 
 		if stake is None:
@@ -947,6 +966,8 @@ class MyTonCore:
 			text = "Stake less than the minimum stake. Minimum stake: {minStake}".format(minStake=config17.min_stake)
 			# self.local.add_log(text, "error")
 			raise Exception(text)
+		if stake < min_pool_stake:
+			raise Exception(f"Stake less than the minimum stake. stake: {stake}, min stake: {min_pool_stake}")
 		if stake > account.balance:
 			text = "Don't have enough coins. stake: {stake}, account balance: {balance}".format(stake=stake, balance=account.balance)
 			# self.local.add_log(text, "error")
@@ -971,6 +992,7 @@ class MyTonCore:
 		return wallet
 
 	def ElectionEntry(self):
+		usePoolV2 = self.using_nominator_pool_v2()
 		usePool = self.using_pool()
 		useController = self.using_liquid_staking()
 		wallet = self.GetValidatorWallet()
@@ -1030,7 +1052,12 @@ class MyTonCore:
 
 		pool = None
 		controllerAddr = None
-		if usePool:
+		if usePoolV2:
+			pool = self.get_pool_v2()
+			if pool is None:
+				raise Exception("Could not get nominator-pool v2 with pool mode on")
+			addrB64 = pool.addrB64
+		elif usePool:
 			pool = self.get_pool()
 			if pool is None:
 				raise Exception("Could not get pool with pool mode on")
@@ -1062,7 +1089,15 @@ class MyTonCore:
 		maxFactor = self.GetMaxFactor()
 
 		# Create fift's. Continue with pool or walet
-		if usePool:
+		if usePoolV2:
+			assert pool is not None
+			proxy_addr = self.get_validator_proxy_v2(pool.addrB64, wallet.addrB64)
+			var1 = self.CreateElectionRequest(proxy_addr, startWorkTime, adnl_addr, maxFactor)
+			validatorSignature = self.GetValidatorSignature(validator_key, var1)
+			validatorPubkey, resultFilePath = self.sign_election_request_with_pool_v2_with_validator(proxy_addr, startWorkTime, adnl_addr, validator_pubkey_b64, validatorSignature, maxFactor, stake)
+			resultFilePath = self.SignBocWithWallet(wallet, resultFilePath, pool.addrB64, 1.3)
+			self.SendFile(resultFilePath, wallet)
+		elif usePool:
 			if pool is None:
 				raise Exception("Could not get pool with pool mode on")
 			var1 = self.CreateElectionRequest(pool.addrB64, startWorkTime, adnl_addr, maxFactor)
@@ -1182,11 +1217,18 @@ class MyTonCore:
 
 	def PoolsUpdateValidatorSet(self):
 		self.local.add_log("start PoolsUpdateValidatorSet function", "debug")
+		use_v1 = self.using_nominator_pool() or self.using_single_nominator()
+		use_v2 = self.using_nominator_pool_v2()
 		wallet = self.GetValidatorWallet()
 		pools = self.GetPools()
 		for pool in pools:
 			try:
-				self.PoolUpdateValidatorSet(pool.addrB64, wallet)
+				account = self.GetAccount(pool.addrB64)
+				if self.account_is_pool_v2(account):
+					if use_v2 and account.status == "active":
+						self.pool_update_validator_set_v2(pool, wallet)
+				elif use_v1:
+					self.PoolUpdateValidatorSet(pool.addrB64, wallet)
 			except Exception as e:
 				self.local.add_log(f"Error updating validator set for pool {pool.addrB64}: {e}", "error")
 				continue
@@ -1269,7 +1311,7 @@ class MyTonCore:
 		file.close()
 
 
-	def addr_b64_to_bytes(self, addr_b64):
+	def addr_b64_to_bytes(self, addr_b64: str) -> bytes:
 		workchain, addr, bounceable = self.ParseAddrB64(addr_b64)
 		workchain_bytes = int.to_bytes(workchain, 4, "big", signed=True)
 		addr_bytes = bytes.fromhex(addr)
@@ -2099,31 +2141,22 @@ class MyTonCore:
 				destination = wallet.addrB64
 		return destination
 
-	def ParseAddrB64(self, addrB64):
+	def ParseAddrB64(self, addr_b64: str):
 		# Get buffer
-		fname = addrB64
+		fname = addr_b64
 		buff = self.GetFunctionBuffer(fname, timeout=1)
 		if buff:
 			return buff
 
-		buff = addrB64.replace('-', '+')
+		buff = addr_b64.replace('-', '+')
 		buff = buff.replace('_', '/')
 		buff = buff.encode()
 		b = base64.b64decode(buff)
-		testnet_int = (b[0] & 0x80)
-		if testnet_int == 0:
-			testnet = False
-		else:
-			testnet = True
 		bounceable_int = (b[0] & 0x40)
 		if bounceable_int != 0:
 			bounceable = False
 		else:
 			bounceable = True
-		networkTestnet = self.IsTestnet()
-		if testnet != networkTestnet:
-			text = f"ParseAddrB64 warning: testnet flag do not match. Addr: {testnet}, Network: {networkTestnet}"
-			self.local.add_log(text, "warning")
 
 		# get wc and addr
 		workchain_bytes = b[1:2]
@@ -2248,6 +2281,9 @@ class MyTonCore:
 	def using_nominator_pool(self):
 		return self.get_mode_value('nominator-pool')
 
+	def using_nominator_pool_v2(self):
+		return self.get_mode_value('nominator-pool-v2')
+
 	def using_single_nominator(self):
 		return self.get_mode_value('single-nominator')
 
@@ -2255,7 +2291,7 @@ class MyTonCore:
 		return self.get_mode_value('liquid-staking')
 
 	def using_pool(self) -> bool:
-		return self.using_nominator_pool() or self.using_single_nominator()
+		return self.using_nominator_pool() or self.using_nominator_pool_v2() or self.using_single_nominator()
 
 	def using_validator(self):
 		return self.get_mode_value('validator')
@@ -2395,6 +2431,8 @@ class MyTonCore:
 	def is_pool_ready_to_stake(self, pool: Pool):
 		addr = pool.addrB64
 		account = self.GetAccount(addr)
+		if self.account_is_pool_v2(account):  # v2 pools are staked via get_pool_v2
+			return False
 		is_single_nominator = self.is_account_single_nominator(account)
 		if self.using_single_nominator() and not is_single_nominator:
 			return False
@@ -2443,6 +2481,162 @@ class MyTonCore:
 		poolData["validatorSetChangeTime"] = data[14]
 		poolData["stakeHeldFor"] = data[15]
 		return poolData
+
+	def _pool_v2_resource(self, name: str) -> AbstractContextManager[Path]:
+		return get_package_resource_path('mytoncore', f'contracts/nominator-pool-v2/{name}')
+
+	def account_is_pool_v2(self, account: Account) -> bool:
+		return self.GetVersionFromCodeHash(account.codeHash) == 'npool_v2'
+
+	def get_pool_data_v2(self, addr_b64: str) -> PoolDataV2:
+		stack = self.run_get_method(addr_b64, "get_pool_data")
+		if len(stack) < 13:
+			raise Exception(f"expected 13 stack items, got {len(stack)}: {stack}")
+		return PoolDataV2(
+			pool_id=int(stack[1]),
+			halted=int(stack[2]) != 0,
+			owner_share=int(stack[3]),
+			pool_supply=int(stack[4]),
+			round_closed=int(stack[5]) != 0,
+			round_index=int(stack[6]),
+			validators_cell=stack[7],
+			nominators_cell=stack[8],
+			max_nominators=int(stack[9]),
+			nominators_amount=int(stack[10]),
+			pending_deposits=int(stack[11]),
+			pending_withdrawals=int(stack[12]),
+		)
+
+	def get_limits_per_validator_v2(self, pool_addr: str) -> LimitsPerValidatorV2:
+		stack = self.run_get_method(pool_addr, "get_limits_per_validator")
+		if len(stack) < 3:
+			raise Exception(f"expected 3 stack items, got {len(stack)}: {stack}")
+		return LimitsPerValidatorV2(
+			min_ton_per_validator=int(stack[0]),
+			max_ton_per_validator=int(stack[1]),
+			refund_bonus=int(stack[2]),
+		)
+
+	def get_validator_info_v2(self, pool_addr: str, validator_addr: str) -> ValidatorInfoV2:
+		workchain, addr_hex = self.ParseInputAddr(validator_addr)
+		stack = self.run_get_method_local(pool_addr, f"get_validator_info_mtc {workchain} 0x{addr_hex}")
+		if len(stack) < 26:
+			raise Exception(f"expected 26 stack items, got {len(stack)}: {stack}")
+
+		def _usage_record(base: int) -> UsageRecordV2 | None:
+			if int(stack[base + 7]) == 0:
+				return None
+			return UsageRecordV2(
+				proxy_addr=parse_mc_addr_from_vm_int(stack[base]),
+				held_for=int(stack[base + 1]),
+				ton_used=int(stack[base + 2]),
+				rotation_time=int(stack[base + 5]),
+				rotation_count=int(stack[base + 6]),
+			)
+
+		return ValidatorInfoV2(
+			is_banned=int(stack[0]) != 0,
+			usage_state=int(stack[1]),
+			even_proxy=parse_mc_addr_from_vm_int(stack[2]),
+			odd_proxy=parse_mc_addr_from_vm_int(stack[3]),
+			round_parity=int(stack[6]),
+			cur_round_usage=_usage_record(7),
+			prev_round_usage=_usage_record(15),
+			stakeable=int(stack[23]),
+			round_index=int(stack[24]),
+			rotated=int(stack[25]) != 0,
+		)
+
+	def get_validator_proxy_v2(self, pool_addr: str, validator_addr: str) -> str:
+		validator_info = self.get_validator_info_v2(pool_addr, validator_addr)
+		round_index = validator_info.round_index
+		round_is_odd = (round_index % 2) > 0
+		proxy_addr = validator_info.odd_proxy if round_is_odd else validator_info.even_proxy
+		if proxy_addr is None:
+			raise Exception(f"no {'odd' if round_is_odd else 'even'}-round "
+							f"proxy for validator {validator_addr} on pool {pool_addr}")
+		return proxy_addr
+
+	def is_pool_v2_ready_to_stake(self, pool: Pool) -> bool:
+		addr = pool.addrB64
+		account = self.GetAccount(addr)
+		if account.status != "active" or not self.account_is_pool_v2(account):
+			return False
+		try:
+			pool_data = self.get_pool_data_v2(addr)
+		except Exception as e:
+			self.local.add_log(f"failed to read pool {addr}: {e}", "warning")
+			return False
+		if pool_data.halted or pool_data.round_closed:
+			self.local.add_log(f"pool {addr} not ready: {pool_data}", "warning")
+			return False
+		return True
+
+	def get_pool_v2(self) -> Pool:
+		for pool in self.GetPools():
+			try:
+				if self.is_pool_v2_ready_to_stake(pool):
+					return pool
+			except Exception as e:
+				self.local.add_log(f"get_pool_v2: skipping pool {pool.addrB64}: {e}", "debug")
+		raise Exception("Validator nominator-pool v2 not found or not ready")
+
+	def sign_election_request_with_pool_v2_with_validator(self, proxy_addr: str, start_work_time: int,
+	                                                      adnl_addr: str, validator_pubkey_b64: str,
+	                                                      validator_signature: str, max_factor: float,
+	                                                      stake: float) -> tuple[str | None, str]:
+		file_name = self.tempDir + str(start_work_time) + "_validator-query-v2.boc"
+		with self._pool_v2_resource('new-stake.fif') as fift_script:
+			args = [str(fift_script), proxy_addr, str(start_work_time), str(max_factor), adnl_addr,
+			        validator_pubkey_b64, validator_signature, file_name, str(stake)]
+			result = self.fift.run(args)
+		pubkey = parse(result, "validator public key ", '\n')
+		file_name = parse(result, "Saved to file ", '\n')
+		if file_name is None:
+			raise Exception(f"Failed to sign election request: {result}")
+		return pubkey, file_name
+
+	def pool_update_validator_set_v2(self, pool: Pool, wallet: Wallet) -> None:
+		pool_addr = pool.addrB64
+		validator_info = self.get_validator_info_v2(pool_addr, wallet.addrB64)
+		now = int(time.time())
+		records = (validator_info.cur_round_usage, validator_info.prev_round_usage)
+		rotation_pending = any(r is not None and now - r.rotation_time < 60 for r in records)
+		if rotation_pending:
+			self.pool_send_update_vset_v2(pool_addr, wallet)
+			return
+
+		target = validator_info.prev_round_usage or validator_info.cur_round_usage
+		if target is None:
+			return
+		if target.rotation_count < 2:
+			return  # RoundTooEarly
+		if target.rotation_count == 2 and now <= target.rotation_time + target.held_for + 60:
+			self.local.add_log(f"pool {pool_addr}: stake held until " +
+			                   f"{target.rotation_time + target.held_for + 60}", "debug")
+			return  # RecoveryTimeTooEarly
+		if target.proxy_addr is not None and self.get_returned_stake(self.GetFullElectorAddr(), target.proxy_addr) > 0:
+			self.pool_send_recover_stake_v2(pool_addr, wallet)
+
+	def pool_send_update_vset_v2(self, pool_addr: str, wallet: Wallet) -> None:
+		result_file_path = self.tempDir + "v2-update-vset-query.boc"
+		with self._pool_v2_resource('update-vset.fif') as fift_script:
+			args = [str(fift_script), result_file_path]
+			result = self.fift.run(args)
+		result_file_path = parse(result, "Saved to file ", '\n')
+		result_file_path = self.SignBocWithWallet(wallet, result_file_path, pool_addr, 1.1)
+		self.SendFile(result_file_path, wallet)
+		self.local.add_log(f"Sent update vset for pool {pool_addr}")
+
+	def pool_send_recover_stake_v2(self, pool_addr: str, wallet: Wallet) -> None:
+		result_file_path = self.tempDir + "v2-recover-stake-query.boc"
+		with self._pool_v2_resource('recover-stake.fif') as fift_script:
+			args = [str(fift_script), result_file_path]
+			result = self.fift.run(args)
+		result_file_path = parse(result, "Saved to file ", '\n')
+		result_file_path = self.SignBocWithWallet(wallet, result_file_path, pool_addr, 1.2)
+		self.SendFile(result_file_path, wallet)
+		self.local.add_log(f"Sent recover stake for pool {pool_addr}")
 
 	def GetLiquidPoolAddr(self):
 		liquid_pool_addr = self.local.db.get("liquid_pool_addr")

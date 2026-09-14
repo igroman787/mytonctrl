@@ -37,6 +37,7 @@ setup(
         "mytoninstaller.scripts": ["*.sh"],
         "mytoncore": [
             "contracts/single-nominator-pool/*",
+            "contracts/nominator-pool-v2/*",
             "complaints/*",
         ],
         "mytonctrl": [

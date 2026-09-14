@@ -14,7 +14,7 @@ USAGES = {
     "about": "<mode_name>",
     "get": "<setting_name>",
     "set": "<setting_name> <value> [--force]",
-    "create_backup": "[filename] [-u <user>]",
+    "create_backup": "[filename] [-u <user>] [--from-host]",
     "restore_backup": " <filename> [-y] [--skip-create-backup] [-u <user>]",
     "add_custom_overlay": "<name> <path_to_config>",
     "delete_custom_overlay": "<name>",
