@@ -34,8 +34,9 @@ class PoolModule(MtcModule):
         pool.delete()
         color_print("DeletePool - {green}OK{endc}")
 
-    def do_import_pool(self, pool_name, addr_b64):
-        self.check_download_pool_contract_scripts()
+    def do_import_pool(self, pool_name: str, addr_b64: str):
+        if self.ton.using_nominator_pool() or self.ton.using_single_nominator():
+            self.check_download_pool_contract_scripts()
         addr_bytes = self.ton.addr_b64_to_bytes(addr_b64)
         pool_path = self.ton.poolsDir + pool_name
         with open(pool_path + ".addr", 'wb') as file:

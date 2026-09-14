@@ -1,0 +1,18 @@
+#!/usr/bin/fift -s
+"TonUtil.fif" include
+
+{ ."usage: " @' $0 type ." [<savefile>]" cr
+  ."Creates the body of an UpdateVset message (op 0x00000007) for nominator-pool v2." cr
+  ."Anyone may send it to the POOL; it makes the pool re-read config param 34 and rotate the round if the validator set hash changed." cr
+  ."(This replaces v1's op-6 update-validator-set message.)" cr 1 halt
+} : usage
+
+$# dup 0 < swap 1 > or ' usage if
+def? $1 { @' $1 } { "update-vset-query.boc" } cond constant output_fname
+now constant query_id
+."query_id for UpdateVset message is set to " query_id . cr
+
+<b 7 32 u, query_id 64 u, b>
+cr ."Message body is " dup <s csr. cr
+
+2 boc+>B output_fname tuck B>file ."Saved to file " type cr

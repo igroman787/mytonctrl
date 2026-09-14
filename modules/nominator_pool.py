@@ -5,11 +5,19 @@ from modules.pool import PoolModule
 from mytoncore.models import Pool
 from mytonctrl.console_cmd import add_command, check_usage_one_arg, check_usage_two_args, check_usage_args_len
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from mytoncore.mytoncore import MyTonCore
+
 
 class NominatorPoolModule(PoolModule):
 
-    description = 'Standard nominator pools.'
+    description = 'Standard nominator pool - DEPRECATED'
     default_value = False
+
+    @classmethod
+    def check_enable(cls, ton: "MyTonCore"):
+        ton.local.add_log("nominator-pool (v1) mode is deprecated, use nominator-pool-v2 for new pools", "warning")
 
     def do_create_pool(self, pool_name, validator_reward_share_percent, max_nominators_count, min_validator_stake,
                        min_nominator_stake):

@@ -114,7 +114,7 @@ def run_cli():
     if mode == "validator":
         validator_mode = questionary.select(
             "Select mode for validator usage. You can set up this later",
-            choices=["Validator wallet", "Nominator pool", "Single pool", "Liquid Staking", "Skip"],
+            choices=["Validator wallet", "Nominator pool v2", "Nominator pool v1 (deprecated)", "Single pool", "Liquid Staking", "Skip"],
         ).unsafe_ask()
 
     archive_blocks = None
@@ -213,8 +213,10 @@ def run_install(answers: dict):
         CONFIG['ARCHIVE_BLOCKS'] = archive_blocks
 
     if validator_mode and validator_mode not in ('Skip', 'Validator wallet'):
-        if validator_mode == 'Nominator pool':
+        if validator_mode in ('Nominator pool', 'Nominator pool v1 (deprecated)'):
             validator_mode = 'nominator-pool'
+        elif validator_mode == 'Nominator pool v2':
+            validator_mode = 'nominator-pool-v2'
         elif validator_mode == 'Single pool':
             validator_mode = 'single-nominator'
         elif validator_mode == 'Liquid Staking':

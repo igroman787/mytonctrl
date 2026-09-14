@@ -52,9 +52,9 @@ class MyTonCtrl:
             module = UtilitiesModule(self.ton, self.local)
             module.add_console_commands(self._console_engine)
 
-            if (
-                self.ton.using_pool()
-            ):  # add basic pool functions (pools_list, delete_pool, import_pool)
+            # using_pool() covers all pool families incl. v2; adds the basic pool
+            # functions (pools_list, delete_pool, import_pool)
+            if self.ton.using_pool():
                 from modules.pool import PoolModule
 
                 module = PoolModule(self.ton, self.local)
@@ -64,6 +64,12 @@ class MyTonCtrl:
                 from modules.nominator_pool import NominatorPoolModule
 
                 module = NominatorPoolModule(self.ton, self.local)
+                module.add_console_commands(self._console_engine)
+
+            if self.ton.using_nominator_pool_v2():
+                from modules.nominator_pool_v2 import NominatorPoolV2Module
+
+                module = NominatorPoolV2Module(self.ton, self.local)
                 module.add_console_commands(self._console_engine)
 
             if self.ton.using_single_nominator():

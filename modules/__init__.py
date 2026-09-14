@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from modules.collator import CollatorModule
 from modules.module import MtcModule
 from modules.nominator_pool import NominatorPoolModule
+from modules.nominator_pool_v2 import NominatorPoolV2Module
 from modules.single_pool import SingleNominatorModule
 from modules.validator import ValidatorModule
 from modules.controller import ControllerModule
@@ -15,6 +16,7 @@ from modules.prometheus import PrometheusModule
 MODES = {
     'validator': ValidatorModule,
     'nominator-pool': NominatorPoolModule,
+    'nominator-pool-v2': NominatorPoolV2Module,
     'single-nominator': SingleNominatorModule,
     'liquid-staking': ControllerModule,
     'liteserver': LiteserverModule,

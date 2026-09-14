@@ -684,6 +684,11 @@
 		"ru": "{{red}}Версия ton-http-api {0} ниже требуемой {1}. Пожалуйста, переустановите его через команду `installer enable THA`.{{endc}}",
 		"zh_TW": "{{red}}ton-http-api 版本 {0} 低於所需的 {1}。請通過命令 `installer enable THA` 重新安裝。{{endc}}"
 	},
+	"nominator_pool_deprecated_warning": {
+		"en": "{red}Nominator pool v1 (`nominator-pool` mode) is deprecated.{endc}\nConsider migration to nominator pool v2 (`nominator-pool-v2` mode).",
+		"ru": "{red}Пул номинаторов v1 (режим `nominator-pool`) устарел.{endc}\nРассмотрите возможность перехода на пул номинаторов v2 (режим `nominator-pool-v2`).",
+		"zh_TW": "{red}提名池 v1（`nominator-pool` 模式）已棄用。{endc}\n請考慮遷移至提名池 v2（`nominator-pool-v2` 模式）。"
+	},
 	"add_custom_overlay_cmd": {
 		"en": "Add custom overlay",
 		"ru": "Добавить пользовательский оверлей",

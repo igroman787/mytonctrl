@@ -1,0 +1,18 @@
+#!/usr/bin/fift -s
+"TonUtil.fif" include
+
+{ ."usage: " @' $0 type ." [<savefile>]" cr
+  ."Creates the body of a RecoverStakeCompat message (op 0x47657424) for nominator-pool v2." cr
+  ."Sent from the validator wallet to the POOL (basechain); the pool forwards recover_stake to the elector through the validator's proxy." cr
+  ."Attach ~1 TON of value when sending to cover forwarding and recovery gas." cr 1 halt
+} : usage
+
+$# dup 0 < swap 1 > or ' usage if
+def? $1 { @' $1 } { "recover-stake-query.boc" } cond constant output_fname
+now constant query_id
+."query_id for RecoverStakeCompat message is set to " query_id . cr
+
+<b x{47657424} s, query_id 64 u, b>
+cr ."Message body is " dup <s csr. cr
+
+2 boc+>B output_fname tuck B>file ."Saved to file " type cr

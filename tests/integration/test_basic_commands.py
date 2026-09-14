@@ -439,6 +439,18 @@ def test_modes(cli, monkeypatch):  # status_modes, enable_mode, disable_mode
     output = cli.execute("disable_mode", no_color=True)
     assert 'Bad args' in output
 
+def test_enable_deprecated_nominator_pool(cli, monkeypatch):
+    monkeypatch.setattr(sys, "exit", lambda *_: None)
+
+    output = cli.execute("enable_mode nominator-pool", no_color=True)
+    assert 'nominator-pool (v1) mode is deprecated' in output
+    assert 'enable_mode - OK' in output
+
+    output = cli.execute("enable_mode nominator-pool-v2", no_color=True)
+    assert 'deprecated' not in output
+    assert 'enable_mode - OK' in output
+
+
 def parse_settings_output(output: str) -> dict:
     result = {}
     for line in output.splitlines()[1:-1]:
